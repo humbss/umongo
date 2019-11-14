@@ -2,7 +2,7 @@ import datetime as dt
 
 from bson import DBRef, ObjectId, Decimal128
 from marshmallow import ValidationError, missing
-from marshmallow import fields as ma_fields
+from marshmallow import fields as ma_fields, utils as ma_utils
 
 # from .registerer import retrieve_document
 from .exceptions import NotRegisteredDocumentError
@@ -73,9 +73,28 @@ class DictField(BaseField, ma_fields.Dict):
 
 class ListField(BaseField, ma_fields.List):
 
+    def _serialize(self, value, attr, obj, **kwargs):
+        if value is None:
+            return None
+        return [self.inner._serialize(each, attr, obj, **kwargs) for each in value]
+
     def _deserialize(self, value, attr, data, **kwargs):
-        ret = List(self.inner, super()._deserialize(value, attr, data, **kwargs))
-        return ret
+        if not ma_utils.is_collection(value):
+            raise self.make_error("invalid")
+
+        result = []
+        errors = {}
+        for idx, each in enumerate(value):
+            try:
+                result.append(self.inner.deserialize(each, **kwargs))
+            except ValidationError as error:
+                if error.valid_data is not None:
+                    result.append(error.valid_data)
+                errors.update({idx: error.messages})
+        if errors:
+            raise ValidationError(errors, valid_data=result)
+
+        return List(self.inner, result)
 
     def _serialize_to_mongo(self, obj):
         if obj is None:
